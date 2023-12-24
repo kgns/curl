@@ -2927,6 +2927,17 @@ static int ossl_new_session_cb(SSL *ssl, SSL_SESSION *ssl_sessionid)
     bool incache;
     bool added = FALSE;
     void *old_ssl_sessionid = NULL;
+    char session_file[64];
+
+    snprintf(session_file, sizeof(session_file), "/tmp/.ossl_%s-%s:%i", connssl->peer.hostname, cf->conn->primary_ip, connssl->port);
+    BIO *stmp = BIO_new_file(session_file, "w");
+
+    if (stmp == NULL) {
+        failf(data, "SSL: Error writing session file %s", session_file);
+    } else {
+        PEM_write_bio_SSL_SESSION(stmp, ssl_sessionid);
+        BIO_free(stmp);
+    }
 
     Curl_ssl_sessionid_lock(data);
     if(isproxy)
@@ -3817,6 +3828,33 @@ static CURLcode ossl_connect_step1(struct Curl_cfilter *cf,
       infof(data, "SSL reusing session ID");
       connssl->reused_session = TRUE;
     }
+
+    if (ssl_sessionid == NULL) {
+      char session_file[64];
+
+      snprintf(session_file, sizeof(session_file), "/tmp/.ossl_%s-%s:%i", connssl->peer.hostname, cf->conn->primary_ip, connssl->port);
+      BIO *stmp = BIO_new_file(session_file, "r");
+      if (stmp != NULL) {
+        ssl_sessionid = PEM_read_bio_SSL_SESSION(stmp, NULL, 0, NULL);
+        BIO_free(stmp);
+        if (ssl_sessionid == NULL) {
+          failf(data, "SSL: Can't read session file %s", session_file);
+        }
+        else {
+          if (!SSL_set_session(backend->handle, ssl_sessionid)) {
+            failf(data, "SSL: SSL_set_session failed: %s",
+                  ossl_strerror(ERR_get_error(), error_buffer,
+                                sizeof(error_buffer)));
+          }
+          else {
+            infof(data, "SSL reusing session ID");
+            connssl->reused_session = TRUE;
+          }
+          SSL_SESSION_free(ssl_sessionid);
+        }
+      }
+    }
+
     Curl_ssl_sessionid_unlock(data);
   }
 
